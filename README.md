@@ -17,9 +17,6 @@ El **Analizador de Logs de Windows** es una herramienta desarrollada en Python q
 - **Generación de reportes**:
   - Los resultados se exportan automáticamente en un archivo `.csv`.
 
-## Capturas de Pantalla
-> (Incluye aquí imágenes de la interfaz, si las tienes)
-
 ## Requisitos
 1. **Python 3.9 o superior** instalado en tu sistema.
 2. **Sistema Operativo**: Windows.
