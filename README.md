@@ -1,26 +1,29 @@
-# **Analizador de Logs de Windows**
+# Analizador de Eventos de Windows (GUI)
 
-## Descripción
-El **Analizador de Eventos de Windows** es una herramienta desarrollada en Python que permite analizar los eventos del Visor de Eventos de Windows tanto de manera local como remota. Incluye múltiples opciones de filtrado y genera informes detallados en formato CSV.
+Herramienta en Python con interfaz gráfica (Tkinter) que permite analizar y filtrar eventos del Visor de Eventos de Windows de forma sencilla y exportarlos en formato CSV.
 
-## Características
-- **Soporte para equipos locales y remotos**: 
-  Especifica el nombre de un equipo en la red para analizar sus logs, siempre que tengas los permisos necesarios.
-- **Filtros avanzados**:
-  - Niveles de severidad: `ERROR`, `WARNING`, `CRITICAL`.
-  - Filtrado por palabras clave.
-  - Filtrado por ID específico de evento.
-- **Tipos de logs compatibles**:
-  - `Application`
-  - `System`
-  - `Security`
-- **Generación de reportes**:
-  - Los resultados se exportan automáticamente en un archivo `.csv`.
+## 🚀 Características
 
-## Requisitos
-1. **Python 3.9 o superior** instalado en tu sistema.
-2. **Sistema Operativo**: Windows.
-3. **Dependencias de Python**:
-   Instala la biblioteca necesaria ejecutando:
-   ```bash
-   pip install pywin32
+- **Lectura de eventos** desde los registros locales de Windows (Application, System, Security).
+- **Filtrado por niveles**: Error, Warning, Critical.
+- **Filtrado por palabras clave**.
+- **Filtrado por ID de evento específico o múltiples IDs**.
+- **Exportación a CSV** para análisis externo.
+- **Interfaz gráfica mejorada**, intuitiva y lista para uso operativo.
+
+## ✅ Ejemplo de uso
+
+1. Selecciona el tipo de log a analizar (Application, System, Security).
+2. Opcional: Introduce palabras clave separadas por coma.
+3. Opcional: Introduce IDs de eventos específicos separados por coma.
+4. Selecciona los niveles de eventos que deseas consultar.
+5. Selecciona o deja la carpeta de salida por defecto.
+6. Haz clic en **"Analizar Eventos"** para generar el informe CSV.
+
+## 📦 Requerimientos
+
+- **Sistema operativo**: Windows 10/11, Windows Server (requiere acceso a los registros del sistema).
+- **Python 3.8+**
+- **Dependencias**:
+  - `pywin32`
+  - `tkinter` (incluido por defecto en la mayoría de distribuciones Python para Windows)
