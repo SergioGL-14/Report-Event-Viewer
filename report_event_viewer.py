@@ -1,150 +1,248 @@
+import os
+import re
+import csv
 import tkinter as tk
 from tkinter import filedialog, messagebox
-from tkinter.ttk import Combobox, Checkbutton, Separator
-import csv
-import os
-import win32evtlog
+from tkinter.scrolledtext import ScrolledText
+from tkinter import ttk
+
+try:
+    import win32evtlog
+except ImportError:
+    messagebox.showerror("Error de Dependencia", "pywin32 es requerido para acceder al Visor de Eventos de Windows. Instala 'pywin32'.")
+    raise
+
+# =========================
+# Funciones de utilidad
+# =========================
+
+def sanitize_filename(name: str) -> str:
+    """
+    Sustituye caracteres inválidos en nombres de archivo por guiones bajos.
+    """
+    return re.sub(r'[\\/*?"<>|:]+', '_', name)
 
 
-# Función para leer logs de eventos con filtro por ID de evento
-def read_event_logs(server_name="localhost", log_type="Application", levels=None, keywords=None, event_ids=None):
+def read_event_logs(server: str = "localhost",
+                    log_type: str = "Application",
+                    levels: list = None,
+                    keywords: list = None,
+                    event_ids: list = None) -> list:
+    """
+    Lee eventos del Visor de Eventos de Windows con filtros opcionales.
+    :returns: Lista de dicts con campos DateTime, Source, EventID, Category, Message
+    """
     try:
-        handle = win32evtlog.OpenEventLog(server_name, log_type)
+        handle = win32evtlog.OpenEventLog(server, log_type)
     except Exception as e:
-        messagebox.showerror("Error", f"No se pudo conectar al equipo '{server_name}' o al log '{log_type}'.\nDetalles: {str(e)}")
-        return []
+        raise RuntimeError(f"No se pudo abrir log '{log_type}' en '{server}': {e}")
 
     flags = win32evtlog.EVENTLOG_FORWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
+    levels_map = {"ERROR": win32evtlog.EVENTLOG_ERROR_TYPE,
+                  "WARNING": win32evtlog.EVENTLOG_WARNING_TYPE,
+                  "INFORMATION": win32evtlog.EVENTLOG_INFORMATION_TYPE}
     events = []
-    levels_map = {"ERROR": 2, "WARNING": 3, "CRITICAL": 1}
 
-    while True:
-        records = win32evtlog.ReadEventLog(handle, flags, 0)
-        if not records:
-            break
-        for record in records:
-            if levels and record.EventType not in [levels_map[lvl] for lvl in levels]:
-                continue
+    try:
+        while True:
+            records = win32evtlog.ReadEventLog(handle, flags, 0)
+            if not records:
+                break
+            for rec in records:
+                evt_type = rec.EventType
+                if levels and evt_type not in [levels_map[l] for l in levels if l in levels_map]:
+                    continue
 
-            # Filtrar por ID de evento
-            event_id = record.EventID & 0xFFFF
-            if event_ids and event_id not in event_ids:
-                continue
+                eid = rec.EventID & 0xFFFF
+                if event_ids and eid not in event_ids:
+                    continue
 
-            # Filtrar por palabras clave
-            message = record.StringInserts
-            combined_message = " ".join(message) if message else ""
-            if keywords and not any(kw.lower() in combined_message.lower() for kw in keywords):
-                continue
+                inserts = rec.StringInserts or []
+                message = " ".join(inserts) or "No message"
+                if keywords and not any(kw.lower() in message.lower() for kw in keywords):
+                    continue
 
-            events.append({
-                "DateTime": record.TimeGenerated.Format(),
-                "Source": record.SourceName,
-                "EventID": event_id,
-                "Category": record.EventCategory,
-                "Message": combined_message if combined_message else "No message"
-            })
-    win32evtlog.CloseEventLog(handle)
+                events.append({
+                    "DateTime": rec.TimeGenerated.Format(),
+                    "Source": rec.SourceName,
+                    "EventID": eid,
+                    "Category": rec.EventCategory,
+                    "Message": message
+                })
+    except Exception as e:
+        raise RuntimeError(f"Error leyendo registros: {e}")
+    finally:
+        win32evtlog.CloseEventLog(handle)
+
     return events
 
 
-# Generar CSV
-def generate_csv_report(events, output_path):
-    with open(output_path, mode='w', newline='', encoding='utf-8') as file:
-        writer = csv.DictWriter(file, fieldnames=["DateTime", "Source", "EventID", "Category", "Message"])
-        writer.writeheader()
-        for event in events:
-            writer.writerow(event)
-
-
-# Seleccionar carpeta
-def select_folder():
-    folder = filedialog.askdirectory()
-    if folder:
-        folder_path_var.set(folder)
-
-
-# Análisis completo
-def analyze_logs():
-    server_name = server_name_entry.get().strip() or "localhost"
-    log_type = log_type_var.get()
-    keywords = [kw.strip() for kw in keywords_entry.get().split(",") if kw.strip()]
-    output_folder = folder_path_var.get()
-    levels = [level for level, var in level_vars.items() if var.get()]
-    event_ids = [int(eid.strip()) for eid in event_id_entry.get().split(",") if eid.strip().isdigit()]
-
-    if not log_type:
-        messagebox.showerror("Error", "Selecciona un tipo de log.")
-        return
-    if not output_folder:
-        output_folder = os.path.join(os.path.expanduser("~"), "Documents")
-        folder_path_var.set(output_folder)
-    if not levels and not event_ids:
-        messagebox.showerror("Error", "Selecciona al menos un nivel de filtro o un ID de evento.")
-        return
-
-    events = read_event_logs(server_name, log_type, levels, keywords, event_ids)
+def generate_csv_report(events: list, output_path: str):
+    """
+    Exporta los eventos a CSV en la ruta indicada.
+    """
     if not events:
-        messagebox.showinfo("Resultado", f"No se encontraron eventos con los filtros seleccionados en '{server_name}'.")
-        return
+        raise ValueError("No hay eventos para exportar.")
 
-    output_path = os.path.join(output_folder, f"event_report_{server_name}_{log_type}.csv")
-    generate_csv_report(events, output_path)
-    messagebox.showinfo("Completado", f"Informe generado exitosamente en:\n{output_path}")
+    fieldnames = ["DateTime", "Source", "EventID", "Category", "Message"]
+    try:
+        with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            for evt in events:
+                writer.writerow(evt)
+    except Exception as e:
+        raise IOError(f"Error exportando CSV: {e}")
 
+# =========================
+# Clase de la Aplicación
+# =========================
 
-# ---------- GUI Mejorada ---------- #
-root = tk.Tk()
-root.title("Analizador Avanzado de Eventos de Windows")
-root.geometry("600x400")  # Ajuste de tamaño
+class EventAnalyzerApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Analizador de Eventos de Windows")
+        self.geometry("800x700")
+        self.configure(bg="#F5F5F5")
+        self._setup_style()
+        self._create_widgets()
 
-# Variables
-log_type_var = tk.StringVar(value="Application")
-folder_path_var = tk.StringVar(value=os.path.join(os.path.expanduser("~"), "Documents"))
-level_vars = {level: tk.BooleanVar() for level in ["ERROR", "WARNING", "CRITICAL"]}
+    def _setup_style(self):
+        style = ttk.Style(self)
+        style.theme_use('default')
+        # General Labels & Frames
+        style.configure('TLabel', background='#F5F5F5', foreground='#333333', font=('Segoe UI', 9))
+        style.configure('TFrame', background='#F5F5F5')
+        style.configure('TLabelframe', background='#F5F5F5', foreground='#333333')
+        style.configure('TLabelframe.Label', background='#F5F5F5', foreground='#333333')
+        # Treeview light style
+        style.configure('Treeview',
+                        background='#FFFFFF',
+                        fieldbackground='#FFFFFF',
+                        foreground='#333333',
+                        rowheight=25)
+        style.map('Treeview', background=[('selected', '#0078D7')], foreground=[('selected', '#FFFFFF')])
+        style.configure('Treeview.Heading', background='#E1E1E1', foreground='#333333', font=('Segoe UI', 9, 'bold'))
 
-# Estilo títulos de sección
-def section_title(text, row):
-    tk.Label(root, text=text, font=("Arial", 10, "bold")).grid(row=row, column=0, columnspan=3, sticky="w", padx=10, pady=5)
+    def _create_widgets(self):
+        # ------------------- Configuración -------------------
+        cfg = ttk.LabelFrame(self, text="Parámetros de Búsqueda", padding=(10,8))
+        cfg.pack(fill='x', padx=15, pady=10)
 
-# Sección: Conexión
-section_title("Conexión al Equipo:", 0)
-tk.Label(root, text="Nombre de Equipo:").grid(row=1, column=0, padx=10, sticky="w")
-server_name_entry = tk.Entry(root, width=50)
-server_name_entry.grid(row=1, column=1, columnspan=2, padx=10, sticky="w")
-server_name_entry.insert(0, "localhost")
+        # Servidor y Tipo de Log
+        ttk.Label(cfg, text="Equipo:").grid(row=0, column=0, sticky='w')
+        self.server_entry = ttk.Entry(cfg)
+        self.server_entry.insert(0, 'localhost')
+        self.server_entry.grid(row=0, column=1, sticky='w', padx=5)
 
-# Sección: Parámetros de Búsqueda
-Separator(root, orient='horizontal').grid(row=2, column=0, columnspan=3, sticky="ew", pady=5)
-section_title("Parámetros de Búsqueda:", 3)
+        ttk.Label(cfg, text="Tipo de Log:").grid(row=0, column=2, sticky='w', padx=(20,0))
+        self.log_type = ttk.Combobox(cfg, values=["Application", "System", "Security"], state='readonly', width=15)
+        self.log_type.current(0)
+        self.log_type.grid(row=0, column=3, sticky='w', padx=5)
 
-tk.Label(root, text="Tipo de Log:").grid(row=4, column=0, padx=10, sticky="w")
-Combobox(root, textvariable=log_type_var, values=["Application", "System", "Security"]).grid(row=4, column=1, padx=10, sticky="w")
+        # IDs y Keywords
+        ttk.Label(cfg, text="IDs (coma):").grid(row=1, column=0, sticky='w', pady=8)
+        self.event_id_entry = ttk.Entry(cfg, width=30)
+        self.event_id_entry.grid(row=1, column=1, sticky='w')
 
-tk.Label(root, text="IDs de Evento (separados por coma):").grid(row=5, column=0, padx=10, sticky="w")
-event_id_entry = tk.Entry(root, width=50)
-event_id_entry.grid(row=5, column=1, columnspan=2, padx=10, sticky="w")
+        ttk.Label(cfg, text="Keywords (coma):").grid(row=1, column=2, sticky='w', padx=(20,0))
+        self.keywords_entry = ttk.Entry(cfg, width=30)
+        self.keywords_entry.grid(row=1, column=3, sticky='w')
 
-tk.Label(root, text="Palabras Clave (separadas por coma):").grid(row=6, column=0, padx=10, sticky="w")
-keywords_entry = tk.Entry(root, width=50)
-keywords_entry.grid(row=6, column=1, columnspan=2, padx=10, sticky="w")
+        # Niveles
+        ttk.Label(cfg, text="Niveles:").grid(row=2, column=0, sticky='w')
+        levels = ["ERROR", "WARNING", "INFORMATION"]
+        self.level_vars = {}
+        lv_frame = ttk.Frame(cfg)
+        lv_frame.grid(row=2, column=1, columnspan=3, sticky='w', pady=8)
+        for lvl in levels:
+            var = tk.BooleanVar()
+            cb = tk.Checkbutton(lv_frame, text=lvl, variable=var, bg="#F5F5F5", fg="#333333",
+                                selectcolor="#E1E1E1", activebackground="#F5F5F5")
+            cb.pack(side='left', padx=10)
+            self.level_vars[lvl] = var
 
-# Filtros de Nivel
-tk.Label(root, text="Niveles:").grid(row=7, column=0, padx=10, sticky="w")
-filter_frame = tk.Frame(root)
-filter_frame.grid(row=7, column=1, columnspan=2, padx=10, pady=5, sticky="w")
-for level, var in level_vars.items():
-    Checkbutton(filter_frame, text=level, variable=var).pack(side="left", padx=5)
+        # ------------------- Vista Previa -------------------
+        prev_frame = ttk.LabelFrame(self, text="Vista Previa (máx 50)", padding=(10,8))
+        prev_frame.pack(fill='both', expand=True, padx=15, pady=10)
 
-# Sección: Salida
-Separator(root, orient='horizontal').grid(row=8, column=0, columnspan=3, sticky="ew", pady=5)
-section_title("Carpeta de Salida:", 9)
+        cols = ["DateTime", "Source", "EventID", "Message"]
+        self.tree = ttk.Treeview(prev_frame, columns=cols, show='headings', height=10)
+        for c in cols:
+            self.tree.heading(c, text=c)
+            self.tree.column(c, width=150, anchor='w')
+        vsb = ttk.Scrollbar(prev_frame, orient='vertical', command=self.tree.yview)
+        self.tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side='right', fill='y')
+        self.tree.pack(fill='both', expand=True)
 
-tk.Entry(root, textvariable=folder_path_var, width=50).grid(row=10, column=0, columnspan=2, padx=10, pady=5, sticky="w")
-tk.Button(root, text="Seleccionar", command=select_folder).grid(row=10, column=2, padx=10, pady=5, sticky="w")
+        # ------------------- Logs -------------------
+        log_frame = ttk.LabelFrame(self, text="Logs", padding=(10,8))
+        log_frame.pack(fill='x', padx=15, pady=10)
+        self.log_box = ScrolledText(log_frame, height=5, state='disabled', bg='#FFFFFF', fg='#333333', font=('Segoe UI', 9))
+        self.log_box.pack(fill='x')
 
-# Botón principal
-Separator(root, orient='horizontal').grid(row=11, column=0, columnspan=3, sticky="ew", pady=10)
-tk.Button(root, text="Analizar Eventos", command=analyze_logs, bg="green", fg="white", font=("Arial", 11, "bold")).grid(row=12, column=0, columnspan=3, pady=15)
+        # ------------------- Botones -------------------
+        btn_frame = ttk.Frame(self, padding=(15,0))
+        btn_frame.pack(fill='x', pady=10)
 
-root.mainloop()
+        self.load_btn = tk.Button(btn_frame, text="Cargar Eventos",
+                                  bg="#0078D7", fg="#FFFFFF", font=('Segoe UI', 10, 'bold'),
+                                  activebackground="#005A9E", command=self.load_events)
+        self.load_btn.pack(side='left')
+
+        self.export_btn = tk.Button(btn_frame, text="Exportar CSV",
+                                    bg="#0078D7", fg="#FFFFFF", font=('Segoe UI', 10, 'bold'),
+                                    activebackground="#005A9E", state='disabled', command=self.save_csv)
+        self.export_btn.pack(side='left', padx=10)
+
+    def log(self, msg: str):
+        self.log_box['state'] = 'normal'
+        self.log_box.insert('end', msg + '\n')
+        self.log_box.see('end')
+        self.log_box['state'] = 'disabled'
+
+    def load_events(self):
+        server = self.server_entry.get().strip() or 'localhost'
+        log_type = self.log_type.get()
+        keywords = [k.strip() for k in self.keywords_entry.get().split(',') if k.strip()]
+        ids = [int(i) for i in self.event_id_entry.get().split(',') if i.strip().isdigit()]
+        levels = [lvl for lvl, var in self.level_vars.items() if var.get()]
+
+        self.log(f"Cargando eventos de '{server}' - {log_type}...")
+        try:
+            self.events = read_event_logs(server, log_type, levels, keywords, ids)
+            self.log(f"{len(self.events)} eventos cargados.")
+            for i in self.tree.get_children(): self.tree.delete(i)
+            for evt in self.events[:50]:
+                self.tree.insert('', 'end', values=(evt['DateTime'], evt['Source'], evt['EventID'], evt['Message']))
+            self.export_btn['state'] = 'normal'
+        except Exception as e:
+            messagebox.showerror("Error leyendo eventos", str(e))
+            self.log(f"ERROR: {e}")
+
+    def save_csv(self):
+        if not hasattr(self, 'events') or not self.events:
+            messagebox.showwarning("Sin datos", "No hay eventos para exportar.")
+            return
+
+        default = sanitize_filename(f"events_{self.server_entry.get()}_{self.log_type.get()}.csv")
+        path = filedialog.asksaveasfilename(defaultextension='.csv', initialfile=default,
+                                            filetypes=[('CSV','*.csv'),('Todos','*.*')])
+        if not path:
+            return
+        self.log(f"Exportando a '{path}'...")
+        try:
+            generate_csv_report(self.events, path)
+            self.log("Exportación finalizada correctamente.")
+            messagebox.showinfo("Listo", f"CSV generado:\n{path}")
+        except Exception as e:
+            messagebox.showerror("Error exportando", str(e))
+            self.log(f"ERROR: {e}")
+
+# =========================
+# Lógica principal
+# =========================
+if __name__ == '__main__':
+    app = EventAnalyzerApp()
+    app.mainloop()
